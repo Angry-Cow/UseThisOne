@@ -1,0 +1,26 @@
+{
+  "name": "T.O.L.R. — Tools of Last Resort",
+  "short_name": "T.O.L.R.",
+  "description": "NRA-certified firearms training in New Jersey. Handgun safety, NJ Permit to Carry (CCARE), personal defense & Stop the Bleed courses.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "https://fgfyfxgbsqirdenkwatl.supabase.co/storage/v1/object/sign/tolrBucket/web-app-manifest-192x192.png?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV9hM2ZkNGI2Ny04MTk5LTQ3MjYtOGQ2ZC1iZTI0ODU2ZjlkOTIiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJ0b2xyQnVja2V0L3dlYi1hcHAtbWFuaWZlc3QtMTkyeDE5Mi5wbmciLCJpYXQiOjE3ODA4MzI2MzksImV4cCI6MTkzODUxMjYzOX0.33EjKUBu1yKEuFYbnb1azyz-VnOC8EQ5M5PN-hTJHj8",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "https://fgfyfxgbsqirdenkwatl.supabase.co/storage/v1/object/sign/tolrBucket/web-app-manifest-512x512.png?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV9hM2ZkNGI2Ny04MTk5LTQ3MjYtOGQ2ZC1iZTI0ODU2ZjlkOTIiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJ0b2xyQnVja2V0L3dlYi1hcHAtbWFuaWZlc3QtNTEyeDUxMi5wbmciLCJpYXQiOjE3ODA4MzI2NjIsImV4cCI6MTkzODUxMjY2Mn0.zZVKL8G8D1KG8NKLgSN8-GlskuknfuB8WeRLUSYZTac",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "theme_color": "#ffffff",
+  "background_color": "#ffffff",
+  "display": "standalone"
+}
