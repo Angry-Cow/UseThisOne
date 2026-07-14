@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+############################################
+# Supabase Full Migration Orchestrator
+############################################
+# Required env vars:
+#   SOURCE_DB_URL
+#   TARGET_DB_URL
+#   SOURCE_PROJECT_REF
+#   TARGET_PROJECT_REF
+#   SOURCE_PROJECT_URL      # e.g. https://<source-ref>.supabase.co
+#   TARGET_PROJECT_URL      # e.g. https://<target-ref>.supabase.co
+#   SOURCE_SERVICE_ROLE_KEY
+#   TARGET_SERVICE_ROLE_KEY
+#
+# Optional:
+#   WORKDIR=./tolr_migration
+#   SKIP_DB=0
+#   SKIP_STORAGE=0
+#   SKIP_FUNCTIONS=0
+
+WORKDIR="${WORKDIR:-./tolr_migration}"
+SKIP_DB="${SKIP_DB:-0}"
+SKIP_STORAGE="${SKIP_STORAGE:-0}"
+SKIP_FUNCTIONS="${SKIP_FUNCTIONS:-0}"
+
+required_vars=(
+  SOURCE_PROJECT_REF TARGET_PROJECT_REF
+  SOURCE_PROJECT_URL TARGET_PROJECT_URL
+  SOURCE_SERVICE_ROLE_KEY TARGET_SERVICE_ROLE_KEY
+  SOURCE_DB_URL TARGET_DB_URL
+)
+
+for v in "${required_vars[@]}"; do
+  if [ -z "${!v:-}" ]; then
+    echo "ERROR: Missing env var $v"
+    exit 1
+  fi
+done
+
+mkdir -p "$WORKDIR"
+cd "$WORKDIR"
+
+echo "==> Checking dependencies..."
+command -v supabase >/dev/null || { echo "supabase CLI not found"; exit 1; }
+command -v psql >/dev/null || { echo "psql not found"; exit 1; }
+command -v node >/dev/null || { echo "node not found"; exit 1; }
+command -v npm >/dev/null || { echo "npm not found"; exit 1; }
+
+############################################
+# 1) Database backup + restore
+############################################
+if [ "$SKIP_DB" != "1" ]; then
+  mkdir -p db_backup
+  pushd db_backup >/dev/null
+
+  echo "==> Dumping database (roles/schema/data)..."
+  supabase db dump --db-url "$SOURCE_DB_URL" -f roles.sql --role-only
+  supabase db dump --db-url "$SOURCE_DB_URL" -f schema.sql
+  supabase db dump --db-url "$SOURCE_DB_URL" -f data.sql --use-copy --data-only -x "storage.buckets_vectors" -x "storage.vector_indexes"
+
+  echo "==> Dumping migration history (optional)..."
+  supabase db dump --db-url "$SOURCE_DB_URL" -f history_schema.sql --schema supabase_migrations || true
+  supabase db dump --db-url "$SOURCE_DB_URL" -f history_data.sql --use-copy --data-only --schema supabase_migrations || true
+
+  echo "==> Generating auth/storage diff (includes custom storage policies)..."
+  supabase link --project-ref "$SOURCE_PROJECT_REF"
+  supabase db diff --linked --schema auth,storage > auth_storage_changes.sql || true
+
+  echo "==> Restoring to target database..."
+  psql \
+    --single-transaction \
+    --variable ON_ERROR_STOP=1 \
+    --file roles.sql \
+    --file schema.sql \
+    --command 'SET session_replication_role = replica' \
+    --file data.sql \
+    --dbname "$TARGET_DB_URL"
+
+  if [ -s history_schema.sql ] && [ -s history_data.sql ]; then
+    psql \
+      --single-transaction \
+      --variable ON_ERROR_STOP=1 \
+      --file history_schema.sql \
+      --file history_data.sql \
+      --dbname "$TARGET_DB_URL"
+  fi
+
+  if [ -s auth_storage_changes.sql ]; then
+    psql \
+      --single-transaction \
+      --variable ON_ERROR_STOP=1 \
+      --file auth_storage_changes.sql \
+      --dbname "$TARGET_DB_URL" || true
+  fi
+
+  popd >/dev/null
+fi
+
+############################################
+# 2) Edge Functions migration
+############################################
+if [ "$SKIP_FUNCTIONS" != "1" ]; then
+  mkdir -p functions_migration/supabase/functions
+  pushd functions_migration >/dev/null
+
+  echo "==> Fetching function list from source..."
+  mapfile -t FUNCS < <(supabase functions list --project-ref "$SOURCE_PROJECT_REF" --output json | node -e '
+    const fs=require("fs");
+    const data=JSON.parse(fs.readFileSync(0,"utf8"));
+    for (const f of data) console.log(f.name);
+  ')
+
+  if [ "${#FUNCS[@]}" -eq 0 ]; then
+    echo "No edge functions found in source."
+  else
+    echo "==> Downloading functions..."
+    for fn in "${FUNCS[@]}"; do
+      supabase functions download "$fn" --project-ref "$SOURCE_PROJECT_REF"
+    done
+
+    echo "==> Deploying functions to target..."
+    for fn in "${FUNCS[@]}"; do
+      supabase functions deploy "$fn" --project-ref "$TARGET_PROJECT_REF"
+    done
+  fi
+
+  popd >/dev/null
+fi
+
+############################################
+# 3) Storage buckets + objects migration
+############################################
+if [ "$SKIP_STORAGE" != "1" ]; then
+  mkdir -p storage_migration
+  pushd storage_migration >/dev/null
+
+  npm init -y >/dev/null 2>&1 || true
+  npm install @supabase/supabase-js@2 >/dev/null
+
+  cat > migrate_storage.js <<'EOF'
+const { createClient } = require('@supabase/supabase-js')
+
+const SRC_URL = process.env.SOURCE_PROJECT_URL
+const SRC_KEY = process.env.SOURCE_SERVICE_ROLE_KEY
+const DST_URL = process.env.TARGET_PROJECT_URL
+const DST_KEY = process.env.TARGET_SERVICE_ROLE_KEY
+
+if (!SRC_URL || !SRC_KEY || !DST_URL || !DST_KEY) {
+  throw new Error('Missing SOURCE_PROJECT_URL/SOURCE_SERVICE_ROLE_KEY/TARGET_PROJECT_URL/TARGET_SERVICE_ROLE_KEY')
+}
+
+const src = createClient(SRC_URL, SRC_KEY)
+const dst = createClient(DST_URL, DST_KEY)
+
+async function listAllFiles(bucket, prefix = '') {
+  let out = []
+  const { data, error } = await src.storage.from(bucket).list(prefix, { limit: 1000 })
+  if (error) throw error
+  for (const item of data || []) {
+    if (item.id) {
+      out.push(prefix ? `${prefix}/${item.name}` : item.name)
+    } else {
+      const childPrefix = prefix ? `${prefix}/${item.name}` : item.name
+      const nested = await listAllFiles(bucket, childPrefix)
+      out = out.concat(nested)
+    }
+  }
+  return out
+}
+
+async function ensureBucket(b) {
+  const { data: existing } = await dst.storage.getBucket(b.name)
+  if (!existing) {
+    const { error } = await dst.storage.createBucket(b.name, {
+      public: b.public,
+      fileSizeLimit: b.file_size_limit || undefined,
+      allowedMimeTypes: b.allowed_mime_types || undefined,
+    })
+    if (error) throw error
+  }
+}
+
+async function main() {
+  const { data: buckets, error } = await src.storage.listBuckets()
+  if (error) throw error
+
+  for (const b of buckets) {
+    console.log(`Bucket: ${b.name}`)
+    await ensureBucket(b)
+    const files = await listAllFiles(b.name)
+    console.log(`  Files: ${files.length}`)
+
+    for (const path of files) {
+      const d = await src.storage.from(b.name).download(path)
+      if (d.error) {
+        console.error(`  download failed: ${path} :: ${d.error.message}`)
+        continue
+      }
+      const u = await dst.storage.from(b.name).upload(path, d.data, { upsert: true })
+      if (u.error) {
+        console.error(`  upload failed: ${path} :: ${u.error.message}`)
+      }
+    }
+  }
+  console.log('Storage migration complete.')
+}
+
+main().catch((e) => {
+  console.error(e)
+  process.exit(1)
+})
+EOF
+
+  node migrate_storage.js
+  popd >/dev/null
+fi
+
+echo "✅ Migration flow completed."
+echo "Artifacts are in: $WORKDIR"

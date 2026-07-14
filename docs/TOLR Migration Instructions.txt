@@ -1,0 +1,13 @@
+export SOURCE_PROJECT_REF="<source-project-ref>"
+export TARGET_PROJECT_REF="<target-project-ref>"
+
+export SOURCE_PROJECT_URL="https://<source-ref>.supabase.co"
+export TARGET_PROJECT_URL="https://<target-ref>.supabase.co"
+
+export SOURCE_DB_URL="postgresql://postgres.<source-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres"
+export TARGET_DB_URL="postgresql://postgres.<target-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres"
+
+export SOURCE_SERVICE_ROLE_KEY="<source-service-role-key>"
+export TARGET_SERVICE_ROLE_KEY="<target-service-role-key>"
+
+bash full_migrate.sh
